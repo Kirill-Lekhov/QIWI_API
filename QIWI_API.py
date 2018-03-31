@@ -1,41 +1,52 @@
 import urllib.request
+import urllib.parse
 import json
-import pprint
 import time
+import requests
 
 
-class QIWI_ERROR(Exception):
+class QiwiError(Exception):
     pass
 
 
-class SINTAKSIS_ERROR(QIWI_ERROR):
+class SintaksisError(QiwiError):
     def __init__(self):
         self.text = "Query execution failed"
 
 
-class TOKEN_ERROR(QIWI_ERROR):
+class TokenError(QiwiError):
     def __init__(self):
         self.text = "Wrong TOKEN"
 
 
-class NO_RIGHTS_ERROR(QIWI_ERROR):
+class NoRightsError(QiwiError):
      def __init__(self):
         self.text = "No right"
 
 
-class TRANSACTION_NOT_FOUND(QIWI_ERROR):
+class TransactionNotFound(QiwiError):
     def __init__(self):
         self.text = "Transaction not found or missing payments with specified characteristics"
 
 
-class WALLET_ERROR(QIWI_ERROR):
+class WalletError(QiwiError):
     def __init__(self):
         self.text = "Wallet not found"
 
 
-class HISTORY_ERROR(QIWI_ERROR):
+class HistoryError(QiwiError):
     def __init__(self):
         self.text = "Too many requests, the service is temporarily unavailable"
+
+
+class MapError(QiwiError):
+    def __init__(self):
+        self.text = "Map processing errors"
+
+
+class NotFoundAddress(MapError):
+    def __init__(self):
+        self.text = "Could not find address"
 
 
 def run_the_query(headers, url):
@@ -71,36 +82,39 @@ class UserQiwi:
         self.user_date = None
 
         try:
-            answer = run_the_query(self.headers, self.urls["Profile"][0])
-            self.update_info(answer)
+            self.update_info()
         except:
-            raise TOKEN_ERROR
+            raise TokenError
 
     def change_token(self, new_token):
         self.token = new_token
 
         if not run_the_query(self.headers, self.urls["Profile"][0]):
-            raise TOKEN_ERROR
+            raise TokenError
 
     def get_user_token(self):
         return self.token
 
     def get_balans(self):
-        answer = run_the_query(self.headers, self.urls["Balance"][0])["accounts"]
-
-        report = ["Balance {}\n-----------------------".format(time.asctime())]
-        for i in answer:
-            if i["balance"]:
-                report.append("{}: {} {}".format(i["alias"],
-                                                 i["balance"]["amount"],
-                                                 self.currency[i["balance"]["currency"]]))
-            else:
-                report.append("{}: {}".format(i["alias"], "Not Stated"))
-
-        return "\n".join(report)
-
-    def update_info(self, answer):
         try:
+            answer = run_the_query(self.headers, self.urls["Balance"][0])["accounts"]
+
+            report = ["Balance {}\n-----------------------".format(time.asctime())]
+            for i in answer:
+                if i["balance"]:
+                    report.append("{}: {} {}".format(i["alias"],
+                                                     i["balance"]["amount"],
+                                                     self.currency[i["balance"]["currency"]]))
+                else:
+                    report.append("{}: {}".format(i["alias"], "Not Stated"))
+
+            return "\n".join(report)
+        except:
+            raise QiwiError
+
+    def update_info(self):
+        try:
+            answer = run_the_query(self.headers, self.urls["Profile"][0])
             comands_info = {'email': answer["authInfo"]['boundEmail'],
                             'last_ip': answer["authInfo"]['ip'],
                             'last_login': answer["authInfo"]['lastLoginDate'],
@@ -125,7 +139,7 @@ class UserQiwi:
                 else:
                     self.user_date[i] = comands_info[i]
         except:
-            raise QIWI_ERROR
+            raise QiwiError
 
     def get_info(self):
         return "User: {} {}\nEmail: {}\nRegistration date: {}\nStatus: {}\nLast ip: {}\nLast change password: {}\n" \
@@ -152,12 +166,13 @@ class UserQiwi:
                                      "Data: {}".format(i["date"]),
                                      "Status: {}".format(i["status"]),
                                      "Error: {}".format(i["error"]),
+                                     "Number transaction: {}".format(i["txnId"]),
                                      "Commission: {} {}".format(i["commission"]["amount"],
                                                                 self.currency[i["commission"]["currency"]]),
                                      "Total: {} {}".format(i["total"]["amount"],
                                                            self.currency[i["total"]["currency"]])])
         except:
-            raise TRANSACTION_NOT_FOUND
+            raise TransactionNotFound
 
         return "\n------------------------\n".join(["\n".join(i) for i in transactions])
 
@@ -168,9 +183,74 @@ class UserQiwi:
                               "Data: {}".format(answer["date"]),
                               "Status: {}".format(answer["status"]),
                               "Error: {}".format(answer["error"]),
+                              "Number transaction: {}".format(answer["txnId"]),
                               "Commission: {} {}".format(answer["commission"]["amount"],
                                                          self.currency[answer["commission"]["currency"]]),
                               "Total: {} {}".format(answer["total"]["amount"],
                                                     self.currency[answer["total"]["currency"]])])
         except:
-            raise TRANSACTION_NOT_FOUND
+            raise TransactionNotFound
+
+    def get_map_terminates(self, address):
+        geocoder_url = "http://geocode-maps.yandex.ru/1.x/"
+        geocoder_params = {"geocode": address,
+                           "format": "json"}
+        try:
+            response = requests.get(geocoder_url, geocoder_params)
+            if response:
+                json_response = response.json()
+                toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
+                components = toponym["metaDataProperty"]["GeocoderMetaData"]["Address"]["Components"]
+                locality = [i["name"] for i in components if i["kind"] == "locality"][0]
+            else:
+                raise NotFoundAddress
+        except:
+            raise MapError
+
+        geocoder_params["geocode"] = locality
+        try:
+            response = requests.get(geocoder_url, geocoder_params)
+            if response:
+                json_response = response.json()
+                toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
+                coords = (tuple(map(float, toponym['boundedBy']['Envelope']['lowerCorner'].split())),
+                          tuple(map(float, toponym['boundedBy']['Envelope']['upperCorner'].split())))
+            else:
+                raise NotFoundAddress
+        except:
+            raise MapError
+
+        headers = {'Accept': 'application/json;charset=UTF-8'}
+        coordinates = ["latNW={}".format(coords[1][1]),
+                       "lngNW={}".format(coords[0][0]),
+                       "latSE={}".format(coords[0][1]),
+                       "lngSE={}".format(coords[1][0])]
+        try:
+            req = urllib.request.Request(
+                'https://edge.qiwi.com/locator/v2/nearest/clusters?{}&zoom=10'.format("&".join(coordinates)),
+                headers=headers)
+            answer = json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
+            address = [i["address"] for i in answer]
+            coordinate = [(i["coordinate"]["longitude"], i["coordinate"]["latitude"]) for i in answer]
+        except:
+            raise MapError
+
+        map_params = {
+            "l": "map",
+            "pt": "~".join([",".join(map(str, i)) + ",pm2dom" for i in coordinate]),
+            "bbox": "~".join([",".join((str(coords[0][0]), str(coords[1][1]))),
+                              ",".join((str(coords[1][0]), str(coords[0][1])))])
+        }
+
+        map_api_server = "http://static-maps.yandex.ru/1.x/"
+
+        try:
+            response = requests.get(map_api_server, params=map_params)
+
+            if not response:
+                raise MapError
+        except:
+            raise MapError
+
+        return map_api_server + "?l={}&pt={}&bbox={}".format(map_params["l"], map_params["pt"],
+                                                             map_params["bbox"]), address
