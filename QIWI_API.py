@@ -95,7 +95,7 @@ class UserQiwi:
     def get_user_token(self):
         return self.token
 
-    def get_balans(self):
+    def get_balance(self):
         try:
             answer = run_the_query(self.headers, self.urls["Balance"][0])["accounts"]
 
