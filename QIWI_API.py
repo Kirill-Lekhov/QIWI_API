@@ -1,6 +1,7 @@
 import json
 import time
 import requests
+from qiwi_api_tools import run_the_query, found_address, write_file, found_id, correct_number
 
 
 class QiwiError(Exception):
@@ -65,61 +66,6 @@ class WrongNumber(QiwiError):
 class TransactionError(QiwiError):
     def __init__(self):
         self.text = "Failed to carry out the transaction"
-
-
-def run_the_query(headers, url):
-    try:
-        response = requests.get(url, headers=headers)
-        if response:
-            return response.json()
-
-        return False
-    except:
-        return False
-
-
-def found_address(ip):
-    try:
-        response = requests.get('http://freegeoip.net/json/{}'.format(ip))
-        if response:
-            json_response = response.json()
-            return json_response["city"]
-        else:
-            return False
-    except:
-        return False
-
-
-def write_file(headers, url, file_name):
-    try:
-        with open(file_name, mode='wb') as f:
-            response = requests.get(url, headers=headers)
-
-            if not response:
-                return False
-
-            f.write(response.content)
-
-        return True
-    except:
-        return False
-
-
-def found_id(number):
-    headers = {"Accept": "application/json",
-               "Content-Type": "application/x-www-form-urlencoded"}
-    data = {"phone": "+" + number}
-    try:
-        request = requests.post("https://qiwi.com/mobile/detect.action", data=data, headers=headers)
-        if request:
-            answer = request.json()
-            if answer["code"]["value"] != '0':
-                return False
-            return answer["message"]
-        else:
-            return False
-    except:
-        return False
 
 
 class UserQiwi:
@@ -361,12 +307,17 @@ class UserQiwi:
         if number is None:
             number = str(self.user_date["id"])
 
+        number = correct_number(number)
+
+        if not number:
+            raise WrongNumber
+
         number_id = found_id(number)
 
         if not number_id:
             raise WrongNumber
 
-        number = number[1:]
+        number = number[2:]
 
         try:
             amount = round(float(amount), 2)
@@ -391,19 +342,25 @@ class UserQiwi:
         except:
             raise TransactionError
 
-    def transaction_qiwi(self, account_id, amount):
+    def transaction_qiwi(self, account_id, amount, comment=None):
         try:
             amount = round(float(amount), 2)
         except ValueError:
             raise WalletError
+
+        account_id = correct_number(account_id)
+        if not account_id:
+            raise WrongNumber
 
         data = {"id": str(int(time.time() * 1000)),
                 "sum": {"amount": amount,
                         "currency": "643"},
                 "paymentMethod": {"type": "Account",
                                   "accountId": "643"},
-                "comment": "test",
                 "fields": {"account": account_id}}
+
+        if comment:
+            data["comment"] = comment
 
         try:
             request = requests.post(self.urls["Qiwi pay"][0], data=json.dumps(data), headers=self.headers)
