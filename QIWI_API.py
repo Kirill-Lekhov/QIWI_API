@@ -1,5 +1,3 @@
-import urllib.request
-import urllib.parse
 import json
 import time
 import requests
@@ -71,9 +69,11 @@ class TransactionError(QiwiError):
 
 def run_the_query(headers, url):
     try:
-        req = urllib.request.Request(url, headers=headers)
-        html = json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
-        return html
+        response = requests.get(url, headers=headers)
+        if response:
+            return response.json()
+
+        return False
     except:
         return False
 
@@ -92,11 +92,13 @@ def found_address(ip):
 
 def write_file(headers, url, file_name):
     try:
-        req = urllib.request.Request(url, headers=headers)
-
         with open(file_name, mode='wb') as f:
-            res = urllib.request.urlopen(req).read()
-            f.write(res)
+            response = requests.get(url, headers=headers)
+
+            if not response:
+                return False
+
+            f.write(response.content)
 
         return True
     except:
@@ -106,7 +108,7 @@ def write_file(headers, url, file_name):
 def found_id(number):
     headers = {"Accept": "application/json",
                "Content-Type": "application/x-www-form-urlencoded"}
-    data = urllib.parse.urlencode({"phone": "+" + number})
+    data = {"phone": "+" + number}
     try:
         request = requests.post("https://qiwi.com/mobile/detect.action", data=data, headers=headers)
         if request:
@@ -114,7 +116,6 @@ def found_id(number):
             if answer["code"]["value"] != '0':
                 return False
             return answer["message"]
-
         else:
             return False
     except:
@@ -274,11 +275,10 @@ class UserQiwi:
                 toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
                 components = toponym["metaDataProperty"]["GeocoderMetaData"]["Address"]["Components"]
                 try:
-                    locality = [i["name"] for i in components if i["kind"] == "locality"][0]
+                    geocoder_params["geocode"] = [i["name"] for i in components if i["kind"] == "locality"][0]
                 except IndexError:
-                    locality = address
+                    geocoder_params["geocode"] = address
 
-            geocoder_params["geocode"] = locality
             response = requests.get(geocoder_url, params=geocoder_params)
             if response:
                 json_response = response.json()
@@ -296,10 +296,10 @@ class UserQiwi:
                        "latSE={}".format(coords[0][1]),
                        "lngSE={}".format(coords[1][0])]
         try:
-            req = urllib.request.Request(
+            answer = requests.get(
                 'https://edge.qiwi.com/locator/v2/nearest/clusters?{}&zoom=10'.format("&".join(coordinates)),
-                headers=headers)
-            answer = json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
+                headers=headers).json()
+
             address = [i["address"] for i in answer]
             coordinate = [(i["coordinate"]["longitude"], i["coordinate"]["latitude"]) for i in answer]
         except:
@@ -414,3 +414,4 @@ class UserQiwi:
                 raise TransactionError
         except:
             raise TransactionError
+
