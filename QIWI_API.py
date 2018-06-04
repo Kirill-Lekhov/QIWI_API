@@ -1,7 +1,7 @@
 import json
 import time
 import requests
-from qiwi_api_tools import run_the_query, found_address, write_file, found_id, correct_number
+from qiwi_api_tools import run_the_query, found_address, write_file, found_id, correct_number, lonlat_distance
 
 
 class QiwiError(Exception):
@@ -70,6 +70,8 @@ class TransactionError(QiwiError):
 
 class UserQiwi:
     url = "https://edge.qiwi.com/"
+    api_geocode_yandex = "http://geocode-maps.yandex.ru/1.x/"
+    api_statick_yandex = "http://static-maps.yandex.ru/1.x/"
 
     def __init__(self, token):
         self.token = token
@@ -207,25 +209,28 @@ class UserQiwi:
         except:
             raise TransactionNotFound
 
-    def get_map_terminates(self, address=None):
+    def get_map_terminates(self, address=None, nearest=False, typ="address"):
         if not address:
             address = found_address(self.user_date["last_ip"])
 
-        geocoder_url = "http://geocode-maps.yandex.ru/1.x/"
         geocoder_params = {"geocode": address,
                            "format": "json"}
         try:
-            response = requests.get(geocoder_url, params=geocoder_params)
+            response = requests.get(UserQiwi.api_geocode_yandex, params=geocoder_params)
             if response:
                 json_response = response.json()
                 toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
                 components = toponym["metaDataProperty"]["GeocoderMetaData"]["Address"]["Components"]
+
+                if nearest and typ == "address":
+                    toponym_address = tuple(map(float, toponym["Point"]["pos"].split()))
+
                 try:
                     geocoder_params["geocode"] = [i["name"] for i in components if i["kind"] == "locality"][0]
                 except IndexError:
                     geocoder_params["geocode"] = address
 
-            response = requests.get(geocoder_url, params=geocoder_params)
+            response = requests.get(UserQiwi.api_geocode_yandex, params=geocoder_params)
             if response:
                 json_response = response.json()
                 toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
@@ -253,23 +258,46 @@ class UserQiwi:
 
         map_params = {
             "l": "map",
-            "pt": "~".join([",".join(map(str, i)) + ",pm2dom" for i in coordinate]),
             "bbox": "~".join([",".join((str(coords[0][0]), str(coords[1][1]))),
                               ",".join((str(coords[1][0]), str(coords[0][1])))])
         }
 
-        map_api_server = "http://static-maps.yandex.ru/1.x/"
+        if nearest:
+            terminals_way = [(i, lonlat_distance(toponym_address, i)) for i in coordinate]
+            coord_terminal = sorted(terminals_way, key=lambda x: x[1])[0]
+            map_params["pt"] = ",".join(map(str, coord_terminal[0])) + ",pm2dom~" + \
+                               ",".join(map(str, toponym_address)) + ",pm2am"
+
+            try:
+                response = requests.get(UserQiwi.api_geocode_yandex, params={"geocode": address,
+                                                                             "format": "json"})
+
+                if response:
+                    json_response = response.json()
+                    toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
+                    address = toponym["metaDataProperty"]["GeocoderMetaData"]["text"]
+
+                else:
+                    address = "Not Found"
+            except:
+                address = "Not Found"
+        else:
+            map_params["pt"] = "~".join([",".join(map(str, i)) + ",pm2dom" for i in coordinate])
 
         try:
-            response = requests.get(map_api_server, params=map_params)
+            response = requests.get(UserQiwi.api_statick_yandex, params=map_params)
 
             if not response:
                 raise MapError
         except:
             raise MapError
 
-        return map_api_server + "?l={}&pt={}&bbox={}".format(map_params["l"], map_params["pt"],
-                                                             map_params["bbox"]), address
+        if nearest:
+            del map_params["bbox"]
+            return UserQiwi.api_statick_yandex + "?l={}&pt={}".format(map_params["l"], map_params["pt"]), address
+
+        return UserQiwi.api_statick_yandex + "?l={}&pt={}&bbox={}".format(map_params["l"], map_params["pt"],
+                                                                          map_params["bbox"]), address
 
     def get_image_check(self, transaction_id, file_name="check.jpg"):
         answer = run_the_query(self.headers, self.urls["Transaction"][0].format(transaction_id))
